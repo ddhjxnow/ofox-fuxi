@@ -1,0 +1,195 @@
+name: Build OrangeFox for Xiaomi 13 (fuxi)
+
+# 纯云端编译：GitHub Actions 免费 runner（Ubuntu 24.04 / 4 vCPU / 16G 内存），
+# 源码 ~25-30G、编译 60-120 分钟，产物走 Artifact + Release。
+
+on:
+  workflow_dispatch:
+    inputs:
+      MANIFEST_BRANCH:
+        description: 'OrangeFox 分支（12.1 / 14.1 / 16.0）'
+        required: true
+        default: '12.1'
+      DEVICE_TREE_URL:
+        description: 'Device tree 仓库'
+        required: true
+        default: 'https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP'
+      DEVICE_TREE_BRANCH:
+        description: 'Device tree 分支'
+        required: true
+        default: 'twrp-12.1'
+      DEVICE_PATH:
+        description: 'Device tree 放置路径'
+        required: true
+        default: 'device/xiaomi/fuxi'
+      DEVICE_NAME:
+        description: '机型代号'
+        required: true
+        default: 'fuxi'
+      MAKEFILE_NAME:
+        description: 'lunch 目标'
+        required: true
+        default: 'twrp_fuxi'
+      BUILD_TARGET:
+        description: '编译目标（recovery / boot / vendorboot）'
+        required: true
+        default: 'recovery'
+      FOX_VARIANT:
+        description: 'FOX_VARIANT（A15 / A14 / A13）'
+        required: true
+        default: 'A15'
+      OF_MAINTAINER:
+        description: '维护者署名'
+        required: true
+        default: 'hhh'
+
+env:
+  FOX_BUILD_DEVICE: fuxi
+  FOX_AB_DEVICE: '1'
+  FOX_DELETE_MAGISK_ADDON: '1'
+  FOX_USE_BASH_SHELL: '1'
+  ALLOW_MISSING_DEPENDENCIES: 'true'
+  LC_ALL: C
+  USE_CCACHE: '1'
+  CCACHE_EXEC: /usr/bin/ccache
+  CCACHE_DIR: /home/runner/.ccache
+  CCACHE_MAXSIZE: 6G
+  TARGET_DEVICE_DIR: device/xiaomi/fuxi
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout builder repo
+        uses: actions/checkout@v4
+
+      - name: 清理 runner 腾出磁盘（默认只剩 ~14G，源码要 30G）
+        uses: rokibhasansagar/slimhub_actions@main
+
+      - name: 磁盘检查
+        run: |
+          df -h /
+          nproc
+          free -h
+
+      - name: 安装编译依赖 + repo 工具
+        run: |
+          sudo apt-get update -qq
+          git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts
+          sudo bash scripts/setup/android_build_env.sh
+          repo --version | head -3
+
+      - name: 安装 JDK 11（aapt2/apksigner 需要）
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '11'
+
+      - name: 配置 git 身份（repo init 需要）
+        run: |
+          git config --global user.name "ofox-ci"
+          git config --global user.email "ofox-ci@users.noreply.github.com"
+          git config --global http.postBuffer 524288000
+
+      - name: 加 swap（16G 内存建 AOSP 系偏紧）
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 12
+
+      - name: 缓存 ccache
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.ccache
+          key: ccache-fox-${{ github.event.inputs.MANIFEST_BRANCH }}-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-fox-${{ github.event.inputs.MANIFEST_BRANCH }}-${{ github.event.inputs.DEVICE_NAME }}-
+
+      - name: 同步 OrangeFox 源码（minimal manifest + OF 项目）
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
+          cd sync
+          ./orangefox_sync.sh \
+            --branch "${{ github.event.inputs.MANIFEST_BRANCH }}" \
+            --path "$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+          du -sh "$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+
+      - name: 放入 device tree
+        run: |
+          SRC="$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+          git clone --depth=1 -b "${{ github.event.inputs.DEVICE_TREE_BRANCH }}" \
+            "${{ github.event.inputs.DEVICE_TREE_URL }}" "$SRC/${{ github.event.inputs.DEVICE_PATH }}"
+          ls "$SRC/${{ github.event.inputs.DEVICE_PATH }}"
+
+      - name: 修主题分辨率（1080x2400，否则 UI 纵向拉伸）
+        run: |
+          SRC="$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+          python3 scripts/fix_ofox_theme.py "$SRC" 1080 2400
+
+      - name: 编译 recovery
+        run: |
+          SRC="$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
+          cd "$SRC"
+          export OF_MAINTAINER="${{ github.event.inputs.OF_MAINTAINER }}"
+          export FOX_VARIANT="${{ github.event.inputs.FOX_VARIANT }}"
+          # 注意：R12 起 FOX_VERSION 已 obsolete（设了会 $(error) 中断编译），
+          # 维护者版本号改用 FOX_MAINTAINER_PATCH_VERSION，且只能是纯整数
+          export FOX_MAINTAINER_PATCH_VERSION="$(date +%y%m%d)"
+          set +e
+          source build/envsetup.sh
+          lunch "${{ github.event.inputs.MAKEFILE_NAME }}-eng"
+          make clean
+          mka adbd "${{ github.event.inputs.BUILD_TARGET }}image" -j"$(nproc --all)"
+          rc=$?
+          set -e
+          echo "build_rc=$rc"
+          exit $rc
+
+      - name: 列出产物
+        if: always()
+        run: |
+          OUT="$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+          ls -alh "$OUT" 2>/dev/null | head -40
+          df -h /
+
+      - name: 失败时把日志存成 artifact（排查用）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ofox-logs-${{ github.run_id }}
+          if-no-files-found: ignore
+          path: |
+            ${{ github.workspace }}/fox_*/out/*.log
+            ${{ github.workspace }}/fox_*/out/verbose.log.gz
+            ${{ github.workspace }}/fox_*/out/error.log
+
+      - name: 上传 recovery 镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrangeFox-${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+          if-no-files-found: error
+          path: |
+            ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
+            ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+
+      - name: 发到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_number }}
+          name: OrangeFox ${{ github.event.inputs.DEVICE_NAME }} build ${{ github.run_number }}
+          body: |
+            OrangeFox 云端编译产物
+            - Manifest: fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+            - Device: ${{ github.event.inputs.DEVICE_NAME }} (${{ github.event.inputs.DEVICE_TREE_BRANCH }})
+            - FOX_VARIANT: ${{ github.event.inputs.FOX_VARIANT }}
+            - 维护者: ${{ github.event.inputs.OF_MAINTAINER }}
+            刷入：`fastboot flash recovery_ab OrangeFox-*.img`（A/B 机型，fuxi 无独立 recovery 分区，写入 recovery_ab 槽）
+          files: |
+            ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
+            ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
