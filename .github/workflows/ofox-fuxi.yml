@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'OrangeFox 分支（12.1 / 14.1 / 16.0）'
+        description: 'OrangeFox 分支（12.1 / 14.1 / 16.0）—— A16 ROM 也先用 12.1，解密不行再换 14.1'
         required: true
         default: '12.1'
       DEVICE_TREE_URL:
@@ -35,9 +35,9 @@ on:
         required: true
         default: 'recovery'
       FOX_VARIANT:
-        description: 'FOX_VARIANT（A15 / A14 / A13）'
+        description: 'FOX_VARIANT（A16 / A15 / A14）—— 只影响版本号显示与 ro.orangefox.variant，不影响功能'
         required: true
-        default: 'A15'
+        default: 'A16'
       OF_MAINTAINER:
         description: '维护者署名'
         required: true

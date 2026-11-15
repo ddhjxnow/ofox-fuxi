@@ -54,7 +54,32 @@ fastboot reboot recovery        # 或 音量上+电源 进 recovery
 > 如果刷完进不去系统/进不去 recovery，需要 `fastboot --disable-verity --disable-verification flash vbmeta_ab`（用原厂 vbmeta）。
 > 首次进 OF 解密 /data 可能慢（mifs），卡 logo 超过 5 分钟才算失败。
 
-## 三、关键文件
+## 三、目标机是 Android 16 时要注意什么
+
+先说结论：**分支还是 12.1，`FOX_VARIANT` 填 `A16`**。理由分三层：
+
+1. `FOX_VARIANT` 是纯标记：`orangefox.mk` 里只做 `LOCAL_CFLAGS += -DFOX_VARIANT="A16"`，
+   最后落到 `ro.orangefox.variant` 属性和版本号/界面显示，**不改变任何功能**。所以填 A16 只是让版本串说实话。
+2. 决定 A16 ROM 能不能用的是这三样，跟分支号无关：
+   - `/data` 文件系统：HyperOS 3 仍是 `mifs`（小米私有 f2fs 变体）。上游 `partition.cpp` 已把它当 f2fs 处理（`Mount/Wipe/fsck` 都有分支），本仓 12.1 HEAD 已包含。
+   - 密钥后端：这棵树 `device.mk` 里 `OF_DEFAULT_KEYMASTER_VERSION := 4.1` + `TW_FORCE_KEYMASTER_VER := true`，
+     `recovery/root` 带的是 QTI 的 HIDL keymaster4.1 服务 + `weaver@1.0`。fuxi 的 vendor blob 就是这套，
+     12.1 的 `prebuilt/Android.mk` 也只打包 `android.hardware.weaver@1.0.so`（HIDL）。
+   - 主题/分辨率：与 Android 版本无关，已由 `scripts/fix_ofox_theme.py` 处理。
+3. 社区事实核对：社区（FiimeROM、@RaeBaeXXX）给 fuxi 出的包标注支持 Android 16/15/14，
+   基线是 R11.3（就是 `fox_12.1` 那条线，R12.0 是它的后继），且注明"数据解密可用"。所以 12.1 走 A16 是走得通的路线。
+
+什么时候该换 `14.1`：**只有解密失败（进 recovery 后 /data 显示 0MB、要求格式化）时**。
+`orangefox_sync.sh` 对 `fox_14.1` 会额外给 `system/vold/` 打 AIDL weaver 补丁（12.1 只有 HIDL weaver@1.0），
+如果 HyperOS 3 把密钥后端换成了 keymint AIDL，就需要它。代价：14.1 是实验分支，补丁多、失败点更多，先试 12.1。
+
+`16.0` 分支不适合这个场景：它是**完整的 OrangeFox manifest**（含 AOSP 全套 + device/google/*），
+仓库 60 GB 起、CI 时间翻倍，而且这套 `twrp-12.1` 设备树没在 A16 build 系统下验证过。
+
+刷 A16 官方固件的额外注意：HyperOS 官方包有 AVB 校验，`fastboot flash recovery_ab` 后若进不去系统，
+用原厂 `vbmeta` 配 `--disable-verity --disable-verification`；刷前先备份（A16 上 /data 一旦被错误格式化就没了）。
+
+## 四、关键文件
 
 | 文件 | 作用 |
 |---|---|
@@ -71,7 +96,7 @@ fastboot reboot recovery        # 或 音量上+电源 进 recovery
   维护者版本号用 `FOX_MAINTAINER_PATCH_VERSION`，且必须是纯整数（流水线里用 `date +%y%m%d`）。
 - 失败时自动把 `out/*.log`、`verbose.log.gz` 传成 artifact，别只盯着 Actions 控制台翻 2 小时日志。
 
-## 四、备用：本地编（这台 NAS）
+## 五、备用：本地编（这台 NAS）
 
 本机 4 核 / 15 GB 内存，根盘只剩 15 GB，所以要放到 `/nas`（12 TB 空闲）：
 
@@ -85,7 +110,7 @@ git clone --depth=1 -b twrp-12.1 https://github.com/lamadaemon/device_xiaomi_fux
 python3 /nas/mobile/ofox-cloud/scripts/fix_ofox_theme.py . 1080 2400
 
 export ALLOW_MISSING_DEPENDENCIES=true FOX_BUILD_DEVICE=fuxi FOX_AB_DEVICE=1 \
-       FOX_VARIANT=A15 FOX_DELETE_MAGISK_ADDON=1 FOX_USE_BASH_SHELL=1 LC_ALL=C \
+       FOX_VARIANT=A16 FOX_DELETE_MAGISK_ADDON=1 FOX_USE_BASH_SHELL=1 LC_ALL=C \
        USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache
 source build/envsetup.sh
 lunch twrp_fuxi-eng
@@ -96,7 +121,7 @@ mka adbd recoveryimage -j4
 按上面手写 export 更稳。Ubuntu/Debian 系依赖装 `OrangeFox/misc/scripts/setup/android_build_env.sh`；
 Arch 上要自己补 `bison flex gperf lib32-ncurses lib32-zlib ncurses zlib libxml2 libpng imagemagick ccache schedtool zip` 等。
 
-## 五、排错对照
+## 六、排错对照
 
 | 现象 | 原因 |
 |---|---|
