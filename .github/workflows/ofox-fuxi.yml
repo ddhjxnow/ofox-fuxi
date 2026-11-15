@@ -77,11 +77,12 @@ jobs:
           free -h
 
       - name: 安装编译依赖 + repo 工具
+        # OrangeFox 的 misc/scripts 必须 clone 到 workspace 之外：
+        # 本仓库自己的 ci/ 目录不能被覆盖（曾经用 scripts/ 重名，clone 失败后 rm -rf 把脚本删了）
         run: |
           sudo apt-get update -qq
-          rm -rf scripts
-          git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts
-          sudo bash scripts/setup/android_build_env.sh
+          git clone --depth=1 https://gitlab.com/OrangeFox/misc/scripts "$RUNNER_TEMP/ofscripts"
+          sudo bash "$RUNNER_TEMP/ofscripts/setup/android_build_env.sh"
           repo --version | head -3
 
       - name: 安装 JDK 11（aapt2/apksigner 需要）
@@ -129,7 +130,10 @@ jobs:
       - name: 修主题分辨率（1080x2400，否则 UI 纵向拉伸）
         run: |
           SRC="$GITHUB_WORKSPACE/fox_${{ github.event.inputs.MANIFEST_BRANCH }}"
-          python3 scripts/fix_ofox_theme.py "$SRC" 1080 2400
+          FIX="$GITHUB_WORKSPACE/ci/fix_ofox_theme.py"
+          echo "repo 根目录内容:"; ls -a "$GITHUB_WORKSPACE"
+          test -f "$FIX" || { echo "找不到 $FIX（ci/ 目录没被 checkout？）"; exit 1; }
+          python3 "$FIX" "$SRC" 1080 2400
 
       - name: 编译 recovery
         run: |

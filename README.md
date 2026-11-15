@@ -16,7 +16,7 @@
 3. `mka recoveryimage` 编出 `out/target/product/fuxi/recovery.img`（ramdisk 是 lz4 压缩的 cpio，里面是 OF 的 `twres` 主题 + `init.recovery` 等）。
 4. 主题分辨率：`gui/pages.cpp` 用主题里 `<resolution width height>` 的声明值算 `scale_w/scale_h`，
    声明的 1080x1920 对上真实 1080x2400 → 横竖缩放不一致 → 界面纵向拉伸。
-   所以编译前把声明值改 1080x2400（`scripts/fix_ofox_theme.py`，幂等）。
+   所以编译前把声明值改 1080x2400（`ci/fix_ofox_theme.py`，幂等）。
    （mifs 支持是 HyperOS2 私有 f2fs 变体，用于解密 /data；R11.3 之后上游 `partition.cpp` 已内置，本脚本只做检查。）
 
 ## 二、云端编译步骤
@@ -65,7 +65,7 @@ fastboot reboot recovery        # 或 音量上+电源 进 recovery
    - 密钥后端：这棵树 `device.mk` 里 `OF_DEFAULT_KEYMASTER_VERSION := 4.1` + `TW_FORCE_KEYMASTER_VER := true`，
      `recovery/root` 带的是 QTI 的 HIDL keymaster4.1 服务 + `weaver@1.0`。fuxi 的 vendor blob 就是这套，
      12.1 的 `prebuilt/Android.mk` 也只打包 `android.hardware.weaver@1.0.so`（HIDL）。
-   - 主题/分辨率：与 Android 版本无关，已由 `scripts/fix_ofox_theme.py` 处理。
+   - 主题/分辨率：与 Android 版本无关，已由 `ci/fix_ofox_theme.py` 处理。
 3. 社区事实核对：社区（FiimeROM、@RaeBaeXXX）给 fuxi 出的包标注支持 Android 16/15/14，
    基线是 R11.3（就是 `fox_12.1` 那条线，R12.0 是它的后继），且注明"数据解密可用"。所以 12.1 走 A16 是走得通的路线。
 
@@ -84,7 +84,7 @@ fastboot reboot recovery        # 或 音量上+电源 进 recovery
 | 文件 | 作用 |
 |---|---|
 | `.github/workflows/ofox-fuxi.yml` | 完整流水线：腾磁盘 → 装依赖/repo → swap/ccache → sync 源码 → 放 device tree → 修主题 → 编译 → 上传 |
-| `scripts/fix_ofox_theme.py` | 把主题声明分辨率改成 1080x2400（幂等，跑两次不会重复改） |
+| `ci/fix_ofox_theme.py` | 把主题声明分辨率改成 1080x2400（幂等，跑两次不会重复改） |
 
 流水线里几个不得不做的动作（都是踩过的坑）：
 
@@ -107,7 +107,7 @@ git clone --depth=1 https://gitlab.com/OrangeFox/sync.git && cd sync
 
 cd /nas/mobile/fox_12.1
 git clone --depth=1 -b twrp-12.1 https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP device/xiaomi/fuxi
-python3 /nas/mobile/ofox-cloud/scripts/fix_ofox_theme.py . 1080 2400
+python3 /nas/mobile/ofox-cloud/ci/fix_ofox_theme.py . 1080 2400
 
 export ALLOW_MISSING_DEPENDENCIES=true FOX_BUILD_DEVICE=fuxi FOX_AB_DEVICE=1 \
        FOX_VARIANT=A16 FOX_DELETE_MAGISK_ADDON=1 FOX_USE_BASH_SHELL=1 LC_ALL=C \
@@ -126,6 +126,7 @@ Arch 上要自己补 `bison flex gperf lib32-ncurses lib32-zlib ncurses zlib lib
 | 现象 | 原因 |
 |---|---|
 | `repo: command not found` | 没跑 `android_build_env.sh`，或它在 `/usr/local/bin` 不在 PATH |
+| `can't open file '.../ci/fix_ofox_theme.py'` | 本仓库的目录被覆盖/删除。注意 `misc/scripts` 必须 clone 到 `$RUNNER_TEMP`，不能落在 workspace 里 |
 | `No space left on device` | 没做 slimhub 清理，或没删 `out/` |
 | `ninja: fatal: posix_spawn: Cannot allocate memory` | 内存不够，加 swap 或 `-j` 降到 2 |
 | `lunch: twrp_fuxi-eng not found` | device tree 路径不是 `device/xiaomi/fuxi`，或 `AndroidProducts.mk` 没被扫到 |
