@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       MANIFEST_BRANCH:
-        description: 'OrangeFox 分支（12.1 / 14.1 / 16.0）—— A16 ROM 也先用 12.1，解密不行再换 14.1'
+        description: '源码分支：当前设备树以 12.1 为基线，A16 解密需真机验证'
         required: true
         default: '12.1'
       DEVICE_TREE_URL:
@@ -41,7 +41,7 @@ on:
       OF_MAINTAINER:
         description: '维护者署名'
         required: true
-        default: 'hhh'
+        default: 'ddhjxnow'
 
 env:
   FOX_BUILD_DEVICE: fuxi
@@ -133,7 +133,7 @@ jobs:
           FIX="$GITHUB_WORKSPACE/ci/fix_ofox_theme.py"
           echo "repo 根目录内容:"; ls -a "$GITHUB_WORKSPACE"
           test -f "$FIX" || { echo "找不到 $FIX（ci/ 目录没被 checkout？）"; exit 1; }
-          python3 "$FIX" "$SRC" 1080 2400
+          python3 "$FIX" "$SRC/bootable/recovery" 1080 2400
 
       - name: 编译 recovery
         run: |
@@ -192,7 +192,8 @@ jobs:
             - Device: ${{ github.event.inputs.DEVICE_NAME }} (${{ github.event.inputs.DEVICE_TREE_BRANCH }})
             - FOX_VARIANT: ${{ github.event.inputs.FOX_VARIANT }}
             - 维护者: ${{ github.event.inputs.OF_MAINTAINER }}
-            刷入：`fastboot flash recovery_ab OrangeFox-*.img`（A/B 机型，fuxi 无独立 recovery 分区，写入 recovery_ab 槽）
+            面向 fuxi 的测试构建；尚未验证 HyperOS 3.0.310.0 的启动与解密。
+            刷写前核对机型、镜像及实际分区，并备份数据；解密失败不要格式化 /data。
           files: |
             ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
             ${{ github.workspace }}/fox_*/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip

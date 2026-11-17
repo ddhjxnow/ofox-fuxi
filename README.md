@@ -1,135 +1,95 @@
-# 小米13 (fuxi) OrangeFox 云端编译
+# 小米13（fuxi）OrangeFox 云端编译
 
-目标：在 GitHub Actions 上把 OrangeFox Recovery 编出来，本机只负责推代码、下产物。
+这是用于 GitHub Actions 的测试构建配置，不是已经通过真机验证的 Android 16 recovery。
 
-- 机型：Xiaomi 13 / `fuxi`（SM8550 kalama，A/B 机型，无独立 recovery 分区，镜像写 `recovery_ab`）
-- 分支：`fox_12.1`（当前 OrangeFox R12.0 主线；该 device tree 就是以 12.1 基线做的，作者官方预编译包也是 R11.3/12.1 基线）
-- device tree：`lamadaemon/device_xiaomi_fuxi_OFRP` @ `twrp-12.1`（自包含，含 vendor 预编译，**不需要** common tree）
+## 目标与验证边界
 
-## 一、编译到底在做什么（因果链）
+- 设备：Xiaomi 13，代号 `fuxi`。
+- 目标系统：用户提供的 HyperOS `3.0.310.0` / Android 16；地区后缀以手机实际显示为准。
+- 源码基线：`fox_12.1`。
+- 设备树：[`lamadaemon/device_xiaomi_fuxi_OFRP`](https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP)，分支 `twrp-12.1`，放置于 `device/xiaomi/fuxi`。
+- 该树作者只注明在 xiaomi.eu HyperOS 2 上测试，并说明 A15/mifs 支持；不能据此保证 HyperOS 3.0.310.0 能启动或解密。
+- `FOX_VARIANT=A16` 是版本标签，不会自动增加 Android 16 解密支持。
 
-1. `OrangeFox/sync` 里的 `orangefox_sync.sh` 用 TWRP minimal manifest 拉一套 AOSP 精简源码树（约 25–30 GB），
-   再 clone/打补丁进 OrangeFox 自己的 `bootable/recovery`（就是 OF 的 UI、脚本、TWRP 核心）。
-2. 把机型 device tree 放到 `device/xiaomi/fuxi`，`lunch twrp_fuxi-eng` 让 build 系统把
-   `BoardConfig.mk`（分区表、A/B、页大小、kernel 头版本、ramdisk lz4）+ `prebuilt/`（vendor blobs、预编译 kernel）
-   合并成一个产品配置。
-3. `mka recoveryimage` 编出 `out/target/product/fuxi/recovery.img`（ramdisk 是 lz4 压缩的 cpio，里面是 OF 的 `twres` 主题 + `init.recovery` 等）。
-4. 主题分辨率：`gui/pages.cpp` 用主题里 `<resolution width height>` 的声明值算 `scale_w/scale_h`，
-   声明的 1080x1920 对上真实 1080x2400 → 横竖缩放不一致 → 界面纵向拉伸。
-   所以编译前把声明值改 1080x2400（`ci/fix_ofox_theme.py`，幂等）。
-   （mifs 支持是 HyperOS2 私有 f2fs 变体，用于解密 /data；R11.3 之后上游 `partition.cpp` 已内置，本脚本只做检查。）
+源码是否编译成功、镜像是否启动、当前固件是否能解密 `/data`，需要分别验证。当前仓库的回归测试只验证脚本路径、XML 修改和幂等性，不执行 Android 编译。
 
-## 二、云端编译步骤
+## 云端使用
 
-前提：一个 GitHub 账号。仓库**公开**时 Actions 标准 runner 不计分钟数；私有仓库每月 2000 分钟免费（一次构建约 60–120 分钟）。
+工作流入口：
+
+https://github.com/ddhjxnow/ofox-fuxi/actions/workflows/ofox-fuxi.yml
+
+1. 如仓库是 fork，先在 Actions 页面按 GitHub 提示启用工作流。
+2. 点击 `Run workflow`，选择 `main`。
+3. 默认参数如下：
+
+| 参数 | 默认值 |
+|---|---|
+| `MANIFEST_BRANCH` | `12.1` |
+| `DEVICE_TREE_URL` | `https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP` |
+| `DEVICE_TREE_BRANCH` | `twrp-12.1` |
+| `DEVICE_PATH` | `device/xiaomi/fuxi` |
+| `DEVICE_NAME` | `fuxi` |
+| `MAKEFILE_NAME` | `twrp_fuxi` |
+| `BUILD_TARGET` | `recovery` |
+| `FOX_VARIANT` | `A16` |
+| `OF_MAINTAINER` | `ddhjxnow` |
+
+4. 查看每个步骤的实际日志。完整构建成功后，工作流会尝试将镜像上传到本次运行的 Artifacts 和仓库 Releases。
+5. 修改 workflow 后创建一次新的 `Run workflow`；重跑旧任务可能仍使用旧提交。
+
+这个 workflow 使用托管 Ubuntu runner，包含清理磁盘、安装依赖、swap 和 ccache。资源用量与构建时间以实际日志为准；不要把静态检查通过当作构建成功。
+
+## 这次修正的路径问题
+
+Android 源码根目录和 recovery 仓库根目录是不同目录：
+
+```text
+fox_12.1/                          # source envsetup、lunch、mka 在这里执行
+  bootable/recovery/               # 修主题脚本接受这里
+    gui/theme/portrait_hdpi/
+    partition.cpp
+```
+
+正确调用：
 
 ```bash
-# 1) 本地已有现成仓库骨架：/nas/mobile/ofox-cloud
+SRC="$GITHUB_WORKSPACE/fox_12.1"
+FIX="$GITHUB_WORKSPACE/ci/fix_ofox_theme.py"
+python3 "$FIX" "$SRC/bootable/recovery" 1080 2400
+```
+
+如果只传 `$SRC`，脚本会查找不存在的 `$SRC/gui/theme/...` 并失败。
+
+依赖仓库 `OrangeFox/misc/scripts` 克隆到 `$RUNNER_TEMP/ofscripts`，不要为了避免目录冲突而删除 builder 自己的 `ci/`。
+
+主题脚本保留旧设备树中的分辨率修改思路；XML 改动不代表真机布局已经验证，也不证明所有屏幕都需要同样修改。
+
+## 本地回归检查
+
+```bash
 cd /nas/mobile/ofox-cloud
-git init -b main
-git add .
-git commit -m "ofox fuxi cloud build"
-
-# 2) 在 GitHub 网页新建空仓库（比如 ofox-fuxi），然后
-git remote add origin https://github.com/<你的用户名>/ofox-fuxi.git
-git push -u origin main
+uv run --with pyyaml python -m unittest discover -s ci -p 'test_*.py' -v
 ```
 
-3. 打开 `Actions` → 左侧 `Build OrangeFox for Xiaomi 13 (fuxi)` → `Run workflow`，参数默认即可：
-   - `MANIFEST_BRANCH` = `12.1`
-   - `DEVICE_TREE_URL` = `https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP`
-   - `DEVICE_TREE_BRANCH` = `twrp-12.1`
-   - `DEVICE_PATH` = `device/xiaomi/fuxi`
-   - `MAKEFILE_NAME` = `twrp_fuxi`，`DEVICE_NAME` = `fuxi`
-   - `FOX_VARIANT` = `A15`（A14 ROM 就填 A14）
-4. 等 1–2 小时。产物两处都有：本次 run 的 **Artifacts**（`OrangeFox-fuxi-<run_id>`）和 **Releases**（tag `fuxi-<run_number>`）。
-5. 刷入：
+测试使用明确标注的最小 XML fixture 和模拟 Android 目录布局，执行 workflow 中真正的主题步骤，检查传参、输出 XML 和再次运行幂等。它不下载完整源码、不执行编译、不刷机。
+
+有 actionlint 时再执行：
 
 ```bash
-fastboot flash recovery_ab OrangeFox-*-fuxi.img
-fastboot reboot recovery        # 或 音量上+电源 进 recovery
+actionlint .github/workflows/ofox-fuxi.yml
 ```
 
-> fuxi 是 A/B + 无 recovery 分区的机型，写 `recovery_ab`（当前活动槽）。HyperOS 官方包会校验 AVB，
-> 如果刷完进不去系统/进不去 recovery，需要 `fastboot --disable-verity --disable-verification flash vbmeta_ab`（用原厂 vbmeta）。
-> 首次进 OF 解密 /data 可能慢（mifs），卡 logo 超过 5 分钟才算失败。
+## 安全与兼容性
 
-## 三、目标机是 Android 16 时要注意什么
+- 不要把 `mifs` 文件系统识别与 FBE / metadata encryption 解密混为一谈。
+- 解密失败时先保存 `/tmp/recovery.log`，核对当前固件的 fstab、内核、vendor blobs 和密钥服务；不要直接格式化 `/data`。
+- 不要因为 `/data` 显示 0MB 就断定必须换 14.1 或 16.0。
+- A/B 不代表没有独立 recovery 分区。刷入位置需核对 fuxi 实际分区表、镜像格式和设备树说明。
+- 刷写前确认 bootloader 已解锁、备份重要数据及原恢复镜像。不要将关闭 AVB 或刷其他固件的 vbmeta 当作通用修复。
+- 当前源码如果拒绝 `FOX_VERSION`，不要设置它；维护者版本变量 `FOX_MAINTAINER_PATCH_VERSION` 按上游规则使用整数。
 
-先说结论：**分支还是 12.1，`FOX_VARIANT` 填 `A16`**。理由分三层：
+真正基于 `fox_16.0` 构建需要独立 checkout，并移植/验证设备树；不能只改分支输入。参考官方说明：
 
-1. `FOX_VARIANT` 是纯标记：`orangefox.mk` 里只做 `LOCAL_CFLAGS += -DFOX_VARIANT="A16"`，
-   最后落到 `ro.orangefox.variant` 属性和版本号/界面显示，**不改变任何功能**。所以填 A16 只是让版本串说实话。
-2. 决定 A16 ROM 能不能用的是这三样，跟分支号无关：
-   - `/data` 文件系统：HyperOS 3 仍是 `mifs`（小米私有 f2fs 变体）。上游 `partition.cpp` 已把它当 f2fs 处理（`Mount/Wipe/fsck` 都有分支），本仓 12.1 HEAD 已包含。
-   - 密钥后端：这棵树 `device.mk` 里 `OF_DEFAULT_KEYMASTER_VERSION := 4.1` + `TW_FORCE_KEYMASTER_VER := true`，
-     `recovery/root` 带的是 QTI 的 HIDL keymaster4.1 服务 + `weaver@1.0`。fuxi 的 vendor blob 就是这套，
-     12.1 的 `prebuilt/Android.mk` 也只打包 `android.hardware.weaver@1.0.so`（HIDL）。
-   - 主题/分辨率：与 Android 版本无关，已由 `ci/fix_ofox_theme.py` 处理。
-3. 社区事实核对：社区（FiimeROM、@RaeBaeXXX）给 fuxi 出的包标注支持 Android 16/15/14，
-   基线是 R11.3（就是 `fox_12.1` 那条线，R12.0 是它的后继），且注明"数据解密可用"。所以 12.1 走 A16 是走得通的路线。
-
-什么时候该换 `14.1`：**只有解密失败（进 recovery 后 /data 显示 0MB、要求格式化）时**。
-`orangefox_sync.sh` 对 `fox_14.1` 会额外给 `system/vold/` 打 AIDL weaver 补丁（12.1 只有 HIDL weaver@1.0），
-如果 HyperOS 3 把密钥后端换成了 keymint AIDL，就需要它。代价：14.1 是实验分支，补丁多、失败点更多，先试 12.1。
-
-`16.0` 分支不适合这个场景：它是**完整的 OrangeFox manifest**（含 AOSP 全套 + device/google/*），
-仓库 60 GB 起、CI 时间翻倍，而且这套 `twrp-12.1` 设备树没在 A16 build 系统下验证过。
-
-刷 A16 官方固件的额外注意：HyperOS 官方包有 AVB 校验，`fastboot flash recovery_ab` 后若进不去系统，
-用原厂 `vbmeta` 配 `--disable-verity --disable-verification`；刷前先备份（A16 上 /data 一旦被错误格式化就没了）。
-
-## 四、关键文件
-
-| 文件 | 作用 |
-|---|---|
-| `.github/workflows/ofox-fuxi.yml` | 完整流水线：腾磁盘 → 装依赖/repo → swap/ccache → sync 源码 → 放 device tree → 修主题 → 编译 → 上传 |
-| `ci/fix_ofox_theme.py` | 把主题声明分辨率改成 1080x2400（幂等，跑两次不会重复改） |
-
-流水线里几个不得不做的动作（都是踩过的坑）：
-
-- `rokibhasansagar/slimhub_actions`：GitHub runner 默认只剩 ~14 GB，源码树 30 GB，必须先删掉预装 SDK/工具链。
-- `set-swap-space 12G`：16 GB 内存编 AOSP 系容易 OOM。
-- `git config --global user.name/email`：`repo init` 需要身份，不配会直接失败。
-- ccache 缓存：第二次起编译时间明显缩短（首次冷编 ~90 分钟）。
-- **不要设 `FOX_VERSION`**：OrangeFox R12 起该变量已 obsolete，`orangefox.mk` 里是 `$(error ...)`，设了会直接中断编译。
-  维护者版本号用 `FOX_MAINTAINER_PATCH_VERSION`，且必须是纯整数（流水线里用 `date +%y%m%d`）。
-- 失败时自动把 `out/*.log`、`verbose.log.gz` 传成 artifact，别只盯着 Actions 控制台翻 2 小时日志。
-
-## 五、备用：本地编（这台 NAS）
-
-本机 4 核 / 15 GB 内存，根盘只剩 15 GB，所以要放到 `/nas`（12 TB 空闲）：
-
-```bash
-cd /nas/mobile
-git clone --depth=1 https://gitlab.com/OrangeFox/sync.git && cd sync
-./orangefox_sync.sh --branch 12.1 --path /nas/mobile/fox_12.1     # ~25-30G，几十分钟
-
-cd /nas/mobile/fox_12.1
-git clone --depth=1 -b twrp-12.1 https://github.com/lamadaemon/device_xiaomi_fuxi_OFRP device/xiaomi/fuxi
-python3 /nas/mobile/ofox-cloud/ci/fix_ofox_theme.py . 1080 2400
-
-export ALLOW_MISSING_DEPENDENCIES=true FOX_BUILD_DEVICE=fuxi FOX_AB_DEVICE=1 \
-       FOX_VARIANT=A16 FOX_DELETE_MAGISK_ADDON=1 FOX_USE_BASH_SHELL=1 LC_ALL=C \
-       USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache
-source build/envsetup.sh
-lunch twrp_fuxi-eng
-mka adbd recoveryimage -j4
-```
-
-注意 device tree 自带的 `setup.sh` 里 `export USE_CCACHE=]1` 是笔误、`CCACHE_DIR=` 是空的，别直接 source 它，
-按上面手写 export 更稳。Ubuntu/Debian 系依赖装 `OrangeFox/misc/scripts/setup/android_build_env.sh`；
-Arch 上要自己补 `bison flex gperf lib32-ncurses lib32-zlib ncurses zlib libxml2 libpng imagemagick ccache schedtool zip` 等。
-
-## 六、排错对照
-
-| 现象 | 原因 |
-|---|---|
-| `repo: command not found` | 没跑 `android_build_env.sh`，或它在 `/usr/local/bin` 不在 PATH |
-| `can't open file '.../ci/fix_ofox_theme.py'` | 本仓库的目录被覆盖/删除。注意 `misc/scripts` 必须 clone 到 `$RUNNER_TEMP`，不能落在 workspace 里 |
-| `No space left on device` | 没做 slimhub 清理，或没删 `out/` |
-| `ninja: fatal: posix_spawn: Cannot allocate memory` | 内存不够，加 swap 或 `-j` 降到 2 |
-| `lunch: twrp_fuxi-eng not found` | device tree 路径不是 `device/xiaomi/fuxi`，或 `AndroidProducts.mk` 没被扫到 |
-| 界面纵向拉伸/按钮错位 | 主题分辨率没改（本流水线已处理） |
-| 进不去 recovery、卡 fastboot | A/B 槽写错或 vbmeta 校验，见上面刷入说明 |
-| /data 解密失败 | ROM 用 mifs 且内核/OF 不支持（上游 12.1 已内置） |
+- https://wiki.orangefox.tech/en/dev/building
+- https://gitlab.com/OrangeFox/sync/-/blob/master/README.md
