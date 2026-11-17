@@ -4,6 +4,7 @@ Run: uv run --with pyyaml python -m unittest discover -s ci -p 'test_*.py' -v
 """
 from pathlib import Path
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -38,7 +39,7 @@ class BuildConfigurationTest(unittest.TestCase):
                 )
 
 
-def run_build_step(*, source_rc=0, lunch_rc=0, build_rc=0):
+def run_build_step(*, source_rc=0, lunch_rc=0, build_rc=0, optional_xsd=False):
     """Exercise the real shell step with explicitly stubbed Android functions.
 
     This verifies exit propagation/control flow only, not Android compatibility.
@@ -57,6 +58,7 @@ def run_build_step(*, source_rc=0, lunch_rc=0, build_rc=0):
         raise AssertionError("Unresolved workflow expression in build regression test")
     with tempfile.TemporaryDirectory(prefix="ofox-build-control-") as directory:
         workspace = Path(directory)
+        shutil.copytree(ROOT / "ci", workspace / "ci", ignore=shutil.ignore_patterns("__pycache__"))
         source = workspace / "fox_12.1"
         (source / "build").mkdir(parents=True)
         event_log = workspace / "events.log"
@@ -70,6 +72,17 @@ def run_build_step(*, source_rc=0, lunch_rc=0, build_rc=0):
             'mka() { printf "%s\\n" mka >> "$TEST_EVENT_LOG"; '
             'return "$TEST_BUILD_RC"; }\n', encoding="utf-8"
         )
+        if optional_xsd:
+            # Minimal fixture of OrangeFox/sync's real optional tail check.
+            with (source / "build/envsetup.sh").open("a", encoding="utf-8") as fixture:
+                fixture.write(
+                    'function orangefox_envsetup() {\n'
+                    '    export FOX_MANIFEST_ROOT="$GITHUB_WORKSPACE/fox_12.1"\n'
+                    '    [ -s $FOX_MANIFEST_ROOT/frameworks/base/services/core/xsd/vts/Android.mk ]'
+                    ' && echo -n "" > $FOX_MANIFEST_ROOT/frameworks/base/services/core/xsd/vts/Android.mk\n'
+                    '}\n'
+                    'orangefox_envsetup\n'
+                )
         environment = dict(os.environ)
         for scope in (workflow.get("env", {}), job.get("env", {}), step.get("env", {})):
             environment.update({name: str(value) for name, value in scope.items()})
@@ -87,8 +100,14 @@ def run_build_step(*, source_rc=0, lunch_rc=0, build_rc=0):
 
 
 class BuildControlFlowTest(unittest.TestCase):
+    def test_upstream_missing_optional_file_is_not_init_failure(self):
+        result, events = run_build_step(optional_xsd=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events, ["source", "lunch", "mka"])
+
     def test_preparation_failure_stops_before_build(self):
         cases = (
+            (1, 0, 1, ["source"]),
             (23, 0, 23, ["source"]),
             (0, 42, 42, ["source", "lunch"]),
         )

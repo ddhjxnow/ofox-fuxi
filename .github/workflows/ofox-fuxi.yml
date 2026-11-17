@@ -143,6 +143,8 @@ jobs:
           # 注意：R12 起 FOX_VERSION 已 obsolete（设了会 $(error) 中断编译），
           # 维护者版本号改用 FOX_MAINTAINER_PATCH_VERSION，且只能是纯整数
           export FOX_MAINTAINER_PATCH_VERSION="$(date +%y%m%d)"
+          # 上游 optional XSD 检查在文件不存在/为空时返回 1；只修正这一处语义。
+          python3 "$GITHUB_WORKSPACE/ci/fix_envsetup_return.py" "$SRC/build/envsetup.sh"
           source build/envsetup.sh || {
             rc=$?; echo "envsetup failed: $rc" >&2; exit "$rc";
           }

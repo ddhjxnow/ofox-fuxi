@@ -73,6 +73,10 @@ python3 "$FIX" "$SRC/bootable/recovery" 1080 2400
 
 构建步骤会检查 `source build/envsetup.sh`、`lunch` 和 `mka` 的返回码。初始化失败时立即退出，不再执行后续编译；每次使用全新源码目录，不运行 `make clean`。
 
+但 OrangeFox 的 12.1 同步补丁在 `orangefox_envsetup()` 末尾使用了 `[ -s 可选文件 ] && 清空文件`：文件不存在或已经为空时，这条检查返回 1，即使 `lunch`、`mka` 已加载也会让整个 source 返回 1。`ci/fix_envsetup_return.py` 在 source 前只把这条已知检查改为等价 `if`，使“不需要处理”返回 0，保留真实写入错误和其他初始化失败。它支持 `build/envsetup.sh` 符号链接，重复运行不重复修改；没有该旧语句时不改动文件。
+
+该问题已通过真实 TeamWin envsetup、vendor envsetup 和 OrangeFox 官方补丁在最小目录布局上复现并验证修正；这不等于完整 Android 源码构建通过。
+
 ## 本地回归检查
 
 ```bash
