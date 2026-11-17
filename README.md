@@ -11,7 +11,7 @@
 - 该树作者只注明在 xiaomi.eu HyperOS 2 上测试，并说明 A15/mifs 支持；不能据此保证 HyperOS 3.0.310.0 能启动或解密。
 - `FOX_VARIANT=A16` 是版本标签，不会自动增加 Android 16 解密支持。
 
-源码是否编译成功、镜像是否启动、当前固件是否能解密 `/data`，需要分别验证。当前仓库的回归测试只验证脚本路径、XML 修改和幂等性，不执行 Android 编译。
+源码是否编译成功、镜像是否启动、当前固件是否能解密 `/data`，需要分别验证。当前仓库的回归测试验证脚本路径、XML 幂等性、保留变量配置和构建步骤的退出控制，不执行 Android 编译。
 
 ## 云端使用
 
@@ -65,6 +65,14 @@ python3 "$FIX" "$SRC/bootable/recovery" 1080 2400
 
 主题脚本保留旧设备树中的分辨率修改思路；XML 改动不代表真机布局已经验证，也不证明所有屏幕都需要同样修改。
 
+## 构建变量和失败处理
+
+不要在 workflow、job 或 step 的 `env` 中设置 `TARGET_DEVICE_DIR`。它由 Android 构建系统根据产品配置推导；手动导出会触发 `board_config.mk` 的 `TARGET_DEVICE_DIR may not be set manually` 错误。
+
+这个错误可能导致后续 `dumpvars`、`lunch` 和产品规格查找失败。应先消除最早的致命错误，不要直接将连锁报错当作设备树不存在。
+
+构建步骤会检查 `source build/envsetup.sh`、`lunch` 和 `mka` 的返回码。初始化失败时立即退出，不再执行后续编译；每次使用全新源码目录，不运行 `make clean`。
+
 ## 本地回归检查
 
 ```bash
@@ -72,7 +80,7 @@ cd /nas/mobile/ofox-cloud
 uv run --with pyyaml python -m unittest discover -s ci -p 'test_*.py' -v
 ```
 
-测试使用明确标注的最小 XML fixture 和模拟 Android 目录布局，执行 workflow 中真正的主题步骤，检查传参、输出 XML 和再次运行幂等。它不下载完整源码、不执行编译、不刷机。
+测试使用明确标注的最小 XML fixture 和模拟 Android 目录布局，执行 workflow 中真正的主题步骤，检查传参、输出 XML 和再次运行幂等。构建控制流测试通过显式的 shell 函数替身验证初始化失败即停止、构建退出码保留，并检查各级 env 不导出保留变量。它不下载完整源码、不执行 Android 编译、不刷机。
 
 有 actionlint 时再执行：
 
